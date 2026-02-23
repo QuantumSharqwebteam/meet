@@ -1,7 +1,22 @@
-import { io } from "socket.io-client";
+import io from 'socket.io-client';
 
-const URL = "https://gblfs69p-5000.inc1.devtunnels.ms/";
-// const URL = "https://video-call-server-gm7i.onrender.com";
+const SOCKET_URL =  'https://v9xdr06q-5000.inc1.devtunnels.ms/';
 
-export const socket = io(URL);
-export const navbarBrand = "YourVideoShare";
+export const socket = io(SOCKET_URL, {
+  transports: ['websocket', 'polling'],
+  reconnection: true,
+  reconnectionAttempts: 5,
+  reconnectionDelay: 1000,
+});
+
+socket.on('connect', () => {
+  console.log('Socket connected:', socket.id);
+});
+
+socket.on('disconnect', () => {
+  console.log('Socket disconnected');
+});
+
+socket.on('error', (error) => {
+  console.error('Socket error:', error);
+});

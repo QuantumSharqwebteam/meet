@@ -1,0 +1,7 @@
+{
+  "testEnvironment": "jest-environment-jsdom",
+  "moduleNameMapper": {
+    "\\.(gif|ttf|eot|svg|png|jpg)$": "<rootDir>/src/test/fileMock.js",
+    "\\.(css|less)$": "identity-obj-proxy"
+  }
+}
