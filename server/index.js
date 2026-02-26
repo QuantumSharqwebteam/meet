@@ -23,7 +23,7 @@ app.use(helmet({
 
 // CORS configuration
 const corsOptions = {
-    origin: process.env.CLIENT_URL || 'http://localhost:3000',
+    origin: '*',
     credentials: true,
     methods: ['GET', 'POST']
 };
@@ -61,7 +61,7 @@ app.get('/health', (req, res) => {
 // Socket.IO setup
 const io = socketIo(server, {
     cors: {
-        origin: process.env.CLIENT_URL || 'http://localhost:3000',
+        origin: '*',
         methods: ['GET', 'POST'],
         credentials: true
     },
@@ -82,95 +82,99 @@ io.on('connection', (socket) => {
     // Send connection confirmation
     socket.emit('connected', { socketId: socket.id });
 
-    socket.on('join-room', async (data, callback = () => {}) => {
-        try {
-            const { roomId, displayName } = data;
-            
-            // Validate input
-            if (!roomId || !displayName) {
-                throw new Error('Missing required parameters: roomId and displayName');
-            }
-            
-            const room = await RoomManager.getOrCreateRoom(roomId);
-            
-            // Store peer info without rtpCapabilities initially
-            const peer = await room.addPeer(socket.id, {
-                socket,
-                displayName: displayName.trim(),
-                rtpCapabilities: null // Will be set later
-            });
-            
-            socket.join(roomId);
-            socket.roomId = roomId;
-            socket.peerId = socket.id;
-            socket.displayName = displayName.trim();
-            
-            // Store in connected clients
-            connectedClients.set(socket.id, {
-                ...connectedClients.get(socket.id),
-                roomId,
-                displayName: displayName.trim(),
-                joinedAt: new Date()
-            });
-            
-            // Send router capabilities to client
-            socket.emit('router-rtp-capabilities', {
-                routerRtpCapabilities: room.router.rtpCapabilities,
-                roomId,
-                peerId: socket.id
-            });
-            
-            // Get existing peers
-            const existingPeers = room.getOtherPeers(socket.id);
-            const existingProducers = [];
-            
-            existingPeers.forEach(peer => {
-                peer.producers.forEach(producer => {
-                    existingProducers.push({
-                        producerId: producer.id,
-                        peerId: peer.id,
-                        kind: producer.kind,
-                        displayName: peer.displayName
-                    });
-                });
-            });
-            
-            // Send immediate response
-            callback({
-                success: true,
-                peerId: socket.id,
-                existingProducers,
-                roomInfo: {
-                    roomId: room.roomId,
-                    roomName: room.roomName,
-                    participantCount: room.getParticipantCount()
-                }
-            });
-            
-            // Notify others after a short delay
-            setTimeout(() => {
-                socket.to(roomId).emit('peer-joined', {
-                    peerId: socket.id,
-                    displayName: displayName.trim()
-                });
-            }, 100);
-            
-            logger.info('Peer joined room', {
-                roomId,
-                peerId: socket.id,
-                displayName: displayName.trim(),
-                participantCount: room.getParticipantCount()
-            });
-            
-        } catch (error) {
-            logger.error('Join room failed:', error);
-            callback({ 
-                success: false, 
-                error: error.message,
-                code: 'JOIN_FAILED'
-            });
+    // In the join-room handler in index.js, after getting existing producers
+socket.on('join-room', async (data, callback = () => {}) => {
+    try {
+        const { roomId, displayName } = data;
+        
+        if (!roomId || !displayName) {
+            throw new Error('Missing required parameters: roomId and displayName');
         }
-    });
+        
+        const room = await RoomManager.getOrCreateRoom(roomId);
+        
+        const peer = await room.addPeer(socket.id, {
+            socket,
+            displayName: displayName.trim(),
+            rtpCapabilities: null
+        });
+        
+        socket.join(roomId);
+        socket.roomId = roomId;
+        socket.peerId = socket.id;
+        socket.displayName = displayName.trim();
+        
+        // Store in connected clients
+        connectedClients.set(socket.id, {
+            ...connectedClients.get(socket.id),
+            roomId,
+            displayName: displayName.trim(),
+            joinedAt: new Date()
+        });
+        
+        // Send router capabilities to client
+        socket.emit('router-rtp-capabilities', {
+            routerRtpCapabilities: room.router.rtpCapabilities,
+            roomId,
+            peerId: socket.id
+        });
+        
+        // Get existing peers and their producers
+        const existingPeers = room.getOtherPeers(socket.id);
+        console.log(`Room ${roomId} has ${existingPeers.length} other peers`);
+        
+        const existingProducers = [];
+        
+        existingPeers.forEach(peer => {
+            console.log(`Peer ${peer.id} has ${peer.producers.size} producers`);
+            peer.producers.forEach(producer => {
+                console.log(`- Producer: ${producer.id}, kind: ${producer.kind}`);
+                existingProducers.push({
+                    producerId: producer.id,
+                    peerId: peer.id,
+                    kind: producer.kind,
+                    displayName: peer.displayName
+                });
+            });
+        });
+        
+        console.log(`Sending ${existingProducers.length} existing producers to new peer`);
+        
+        // Send immediate response
+        callback({
+            success: true,
+            peerId: socket.id,
+            existingProducers,
+            roomInfo: {
+                roomId: room.roomId,
+                roomName: room.roomName,
+                participantCount: room.getParticipantCount()
+            }
+        });
+        
+        // Notify others
+        socket.to(roomId).emit('peer-joined', {
+            peerId: socket.id,
+            displayName: displayName.trim()
+        });
+        
+        logger.info('Peer joined room', {
+            roomId,
+            peerId: socket.id,
+            displayName: displayName.trim(),
+            participantCount: room.getParticipantCount(),
+            existingProducersCount: existingProducers.length
+        });
+        
+    } catch (error) {
+        logger.error('Join room failed:', error);
+        callback({ 
+            success: false, 
+            error: error.message,
+            code: 'JOIN_FAILED'
+        });
+    }
+});
     
     // Update RTP capabilities after device loads
     socket.on('update-rtp-capabilities', async (data, callback = () => {}) => {
@@ -439,6 +443,236 @@ io.on('connection', (socket) => {
         
         logger.info('Client disconnected', { socketId: socket.id });
     });
+    // Add these socket event handlers after the existing ones
+
+// Mute/unute audio
+socket.on('toggle-audio', async (data, callback = () => {}) => {
+    try {
+        const { muted } = data;
+        const roomId = socket.roomId;
+        
+        if (!roomId) {
+            throw new Error('Not in a room');
+        }
+        
+        const room = RoomManager.getRoom(roomId);
+        if (!room) {
+            throw new Error('Room not found');
+        }
+        
+        // Find audio producer and toggle
+        const peer = room.getPeer(socket.id);
+        if (peer) {
+            for (const [_, producer] of peer.producers) {
+                if (producer.kind === 'audio') {
+                    if (muted) {
+                        await producer.pause();
+                    } else {
+                        await producer.resume();
+                    }
+                    
+                    // Notify others
+                    socket.to(roomId).emit('peer-audio-toggled', {
+                        peerId: socket.id,
+                        muted
+                    });
+                    
+                    callback({ success: true });
+                    return;
+                }
+            }
+        }
+        
+        callback({ success: true, message: 'No audio track found' });
+        
+    } catch (error) {
+        logger.error('Toggle audio failed:', error);
+        callback({ success: false, error: error.message });
+    }
+});
+
+// Toggle video
+socket.on('toggle-video', async (data, callback = () => {}) => {
+    try {
+        const { enabled } = data;
+        const roomId = socket.roomId;
+        
+        if (!roomId) {
+            throw new Error('Not in a room');
+        }
+        
+        const room = RoomManager.getRoom(roomId);
+        if (!room) {
+            throw new Error('Room not found');
+        }
+        
+        // Find video producer and toggle
+        const peer = room.getPeer(socket.id);
+        if (peer) {
+            for (const [_, producer] of peer.producers) {
+                if (producer.kind === 'video') {
+                    if (!enabled) {
+                        await producer.pause();
+                    } else {
+                        await producer.resume();
+                    }
+                    
+                    // Notify others
+                    socket.to(roomId).emit('peer-video-toggled', {
+                        peerId: socket.id,
+                        enabled
+                    });
+                    
+                    callback({ success: true });
+                    return;
+                }
+            }
+        }
+        
+        callback({ success: true, message: 'No video track found' });
+        
+    } catch (error) {
+        logger.error('Toggle video failed:', error);
+        callback({ success: false, error: error.message });
+    }
+});
+
+// Raise hand
+socket.on('raise-hand', async (data, callback = () => {}) => {
+    try {
+        const { raised } = data;
+        const roomId = socket.roomId;
+        
+        if (!roomId) {
+            throw new Error('Not in a room');
+        }
+        
+        socket.to(roomId).emit('peer-hand-raised', {
+            peerId: socket.id,
+            displayName: socket.displayName,
+            raised
+        });
+        
+        callback({ success: true });
+        
+    } catch (error) {
+        logger.error('Raise hand failed:', error);
+        callback({ success: false, error: error.message });
+    }
+});
+
+// Send chat message
+socket.on('send-message', async (data, callback = () => {}) => {
+    try {
+        const { message, type = 'text' } = data;
+        const roomId = socket.roomId;
+        
+        if (!roomId) {
+            throw new Error('Not in a room');
+        }
+        
+        if (!message || message.trim().length === 0) {
+            throw new Error('Message cannot be empty');
+        }
+        
+        const messageData = {
+            id: uuidv4(),
+            peerId: socket.id,
+            displayName: socket.displayName,
+            message: message.trim(),
+            type,
+            timestamp: new Date().toISOString()
+        };
+        
+        // Broadcast to room including sender
+        io.to(roomId).emit('new-message', messageData);
+        
+        callback({ success: true, messageId: messageData.id });
+        
+    } catch (error) {
+        logger.error('Send message failed:', error);
+        callback({ success: false, error: error.message });
+    }
+});
+
+// Get room info
+socket.on('get-room-info', async (data, callback = () => {}) => {
+    try {
+        const roomId = socket.roomId;
+        
+        if (!roomId) {
+            throw new Error('Not in a room');
+        }
+        
+        const room = RoomManager.getRoom(roomId);
+        if (!room) {
+            throw new Error('Room not found');
+        }
+        
+        const peersInfo = room.getPeersInfo();
+        
+        callback({
+            success: true,
+            roomInfo: {
+                roomId: room.roomId,
+                roomName: room.roomName,
+                participantCount: room.getParticipantCount(),
+                createdAt: room.createdAt,
+                peers: peersInfo
+            }
+        });
+        
+    } catch (error) {
+        logger.error('Get room info failed:', error);
+        callback({ success: false, error: error.message });
+    }
+});
+
+// Change display name
+socket.on('change-name', async (data, callback = () => {}) => {
+    try {
+        const { displayName } = data;
+        const roomId = socket.roomId;
+        
+        if (!displayName || displayName.trim().length === 0) {
+            throw new Error('Invalid display name');
+        }
+        
+        const oldName = socket.displayName;
+        socket.displayName = displayName.trim();
+        
+        // Update in connected clients
+        if (connectedClients.has(socket.id)) {
+            const clientData = connectedClients.get(socket.id);
+            clientData.displayName = displayName.trim();
+            connectedClients.set(socket.id, clientData);
+        }
+        
+        // Update in room peer
+        if (roomId) {
+            const room = RoomManager.getRoom(roomId);
+            if (room) {
+                const peer = room.getPeer(socket.id);
+                if (peer) {
+                    peer.displayName = displayName.trim();
+                }
+            }
+            
+            // Notify others
+            socket.to(roomId).emit('peer-name-changed', {
+                peerId: socket.id,
+                oldName,
+                newName: displayName.trim()
+            });
+        }
+        
+        callback({ success: true });
+        
+    } catch (error) {
+        logger.error('Change name failed:', error);
+        callback({ success: false, error: error.message });
+    }
+});
     
     // Error handling
     socket.on('error', (error) => {

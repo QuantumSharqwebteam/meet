@@ -104,6 +104,60 @@ async addPeer(peerId, { socket, displayName, rtpCapabilities }) {
     
     return peer;
 }
+
+    // Add these methods to the Room class in mediasoupServer.js
+
+// Add this method to Room class for getting peer info
+getPeersInfo() {
+    const peers = [];
+    this.peers.forEach((peer, peerId) => {
+        peers.push({
+            id: peerId,
+            displayName: peer.displayName,
+            joinedAt: peer.joinedAt,
+            producers: Array.from(peer.producers.values()).map(p => ({
+                id: p.id,
+                kind: p.kind,
+                type: p.type
+            }))
+        });
+    });
+    return peers;
+}
+
+// Add this method to Room class for getting producer by kind
+getProducersByKind(kind) {
+    const producers = [];
+    this.peers.forEach(peer => {
+        peer.producers.forEach(producer => {
+            if (producer.kind === kind) {
+                producers.push({
+                    producerId: producer.id,
+                    peerId: peer.id,
+                    displayName: peer.displayName,
+                    kind: producer.kind
+                });
+            }
+        });
+    });
+    return producers;
+}
+// Add this method to the Room class
+getAllProducersWithDetails() {
+    const producers = [];
+    this.peers.forEach((peer, peerId) => {
+        peer.producers.forEach((producer, producerId) => {
+            producers.push({
+                producerId: producer.id,
+                peerId: peerId,
+                kind: producer.kind,
+                displayName: peer.displayName,
+                type: producer.appData?.type || 'camera' // Add type to identify camera vs screen
+            });
+        });
+    });
+    return producers;
+}
     
     removePeer(peerId) {
         const peer = this.peers.get(peerId);
@@ -352,6 +406,8 @@ async function createWorker() {
     
     return worker;
 }
+
+
 
 module.exports = {
     createWorker,
